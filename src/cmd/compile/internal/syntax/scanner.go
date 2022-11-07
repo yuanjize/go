@@ -93,6 +93,7 @@ redo:
 	// skip white space
 	s.stop()
 	startLine, startCol := s.pos()
+	//跳过空白符
 	for s.ch == ' ' || s.ch == '\t' || s.ch == '\n' && !nlsemi || s.ch == '\r' {
 		s.nextch()
 	}
@@ -101,6 +102,7 @@ redo:
 	s.line, s.col = s.pos()
 	s.blank = s.line > startLine || startCol == colbase
 	s.start()
+	// 根据开头字符判断是否可以作为ident
 	if isLetter(s.ch) || s.ch >= utf8.RuneSelf && s.atIdentChar(true) {
 		s.nextch()
 		s.ident()
@@ -399,6 +401,7 @@ func tokStrFast(tok token) string {
 	return _token_name[_token_index[tok-1]:_token_index[tok]]
 }
 
+// 判断是否可以作为 ident的一部分，first表示字符是不是第一个字符
 func (s *scanner) atIdentChar(first bool) bool {
 	switch {
 	case unicode.IsLetter(s.ch) || s.ch == '_':
@@ -434,8 +437,8 @@ func init() {
 	}
 }
 
-func lower(ch rune) rune     { return ('a' - 'A') | ch } // returns lower-case ch iff ch is ASCII letter
-func isLetter(ch rune) bool  { return 'a' <= lower(ch) && lower(ch) <= 'z' || ch == '_' }
+func lower(ch rune) rune     { return ('a' - 'A') | ch }                                  // returns lower-case ch iff ch is ASCII letter
+func isLetter(ch rune) bool  { return 'a' <= lower(ch) && lower(ch) <= 'z' || ch == '_' } // 是否是英文字母或者下划线
 func isDecimal(ch rune) bool { return '0' <= ch && ch <= '9' }
 func isHex(ch rune) bool     { return '0' <= ch && ch <= '9' || 'a' <= lower(ch) && lower(ch) <= 'f' }
 

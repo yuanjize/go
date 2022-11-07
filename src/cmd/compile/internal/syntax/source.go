@@ -9,6 +9,7 @@
 // recently read source segment are highly optimized.
 // This file is self-contained (go tool compile source.go
 // compiles) and thus could be made into its own package.
+// 就是个文件字符扫描器，返回字符，维护当前位置信息，记录当前正在读的segment
 
 package syntax
 
@@ -20,42 +21,44 @@ import (
 // The source buffer is accessed using three indices b (begin),
 // r (read), and e (end):
 //
-// - If b >= 0, it points to the beginning of a segment of most
-//   recently read characters (typically a Go literal).
+//   - If b >= 0, it points to the beginning of a segment of most
+//     recently read characters (typically a Go literal).
 //
-// - r points to the byte immediately following the most recently
-//   read character ch, which starts at r-chw.
+//   - r points to the byte immediately following the most recently
+//     read character ch, which starts at r-chw.
 //
-// - e points to the byte immediately following the last byte that
-//   was read into the buffer.
+//   - e points to the byte immediately following the last byte that
+//     was read into the buffer.
 //
 // The buffer content is terminated at buf[e] with the sentinel
 // character utf8.RuneSelf. This makes it possible to test for
 // the common case of ASCII characters with a single 'if' (see
 // nextch method).
 //
-//                +------ content in use -------+
-//                v                             v
+//	+------ content in use -------+
+//	v                             v
+//
 // buf [...read...|...segment...|ch|...unread...|s|...free...]
-//                ^             ^  ^            ^
-//                |             |  |            |
-//                b         r-chw  r            e
+//
+//	^             ^  ^            ^
+//	|             |  |            |
+//	b         r-chw  r            e
 //
 // Invariant: -1 <= b < r <= e < len(buf) && buf[e] == sentinel
-
+// 就是一个人文件内存buf,让scanner读字符的时候读的快点，每次读出来一个字符(不是字节)
 type source struct {
-	in   io.Reader
+	in   io.Reader //文件reader
 	errh func(line, col uint, msg string)
 
-	buf       []byte // source buffer
+	buf       []byte // source buffer  // 文件buf
 	ioerr     error  // pending I/O error, or nil
-	b, r, e   int    // buffer indices (see comment above)
-	line, col uint   // source position of ch (0-based)
-	ch        rune   // most recently read character
-	chw       int    // width of ch
+	b, r, e   int    // buffer indices (see comment above) // buf的三个索引，b是段的起始位置，r是下一次要返回的字符，e是buf末尾
+	line, col uint   // source position of ch (0-based) // 当前位置
+	ch        rune   // most recently read character // 一个字符
+	chw       int    // width of ch // 字符宽度，就是一个字符占几个字节
 }
 
-const sentinel = utf8.RuneSelf
+const sentinel = utf8.RuneSelf // 小于sentinel的是一个单字节字符
 
 func (s *source) init(in io.Reader, errh func(line, col uint, msg string)) {
 	s.in = in
@@ -90,9 +93,9 @@ func (s *source) error(msg string) {
 // start starts a new active source segment (including s.ch).
 // As long as stop has not been called, the active segment's
 // bytes (excluding s.ch) may be retrieved by calling segment.
-func (s *source) start()          { s.b = s.r - s.chw }
-func (s *source) stop()           { s.b = -1 }
-func (s *source) segment() []byte { return s.buf[s.b : s.r-s.chw] }
+func (s *source) start()          { s.b = s.r - s.chw }             // 标记当前点为起始位置，更新b的值为上一个r
+func (s *source) stop()           { s.b = -1 }                      // 结束骚婊
+func (s *source) segment() []byte { return s.buf[s.b : s.r-s.chw] } //返回当前这个segment的buf，b到r之间三一个segment
 
 // rewind rewinds the scanner's read position and character s.ch
 // to the start of the currently active segment, which must not
@@ -100,6 +103,7 @@ func (s *source) segment() []byte { return s.buf[s.b : s.r-s.chw] }
 // incorrect). Currently, rewind is only needed for handling the
 // source sequence ".."; it must not be called outside an active
 // segment.
+// 重新跑到segment的起始位置重新扫描
 func (s *source) rewind() {
 	// ok to verify precondition - rewind is rarely called
 	if s.b < 0 {
@@ -110,6 +114,7 @@ func (s *source) rewind() {
 	s.nextch()
 }
 
+// 就是把下一个字符读出来，同时更新了source的一些属性，比如当前字符长度，当前字符，行列等
 func (s *source) nextch() {
 redo:
 	s.col += uint(s.chw)
@@ -119,7 +124,7 @@ redo:
 	}
 
 	// fast common case: at least one ASCII character
-	if s.ch = rune(s.buf[s.r]); s.ch < sentinel {
+	if s.ch = rune(s.buf[s.r]); s.ch < sentinel { // 一般来说上来至少一个单字节字符
 		s.r++
 		s.chw = 1
 		if s.ch == 0 {
@@ -164,6 +169,7 @@ redo:
 	}
 }
 
+// 读取更多的文件内容到buf中
 // fill reads more source bytes into s.buf.
 // It returns with at least one more byte in the buffer, or with s.ioerr != nil.
 func (s *source) fill() {
@@ -204,6 +210,7 @@ func (s *source) fill() {
 	s.ioerr = io.ErrNoProgress
 }
 
+// 返回2的倍数大小
 // nextSize returns the next bigger size for a buffer of a given size.
 func nextSize(size int) int {
 	const min = 4 << 10 // 4K: minimum buffer size
