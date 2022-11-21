@@ -16,14 +16,15 @@ import (
 // An Object describes a named language entity such as a package,
 // constant, type, variable, function (incl. methods), or label.
 // All objects implement the Object interface.
+// AST上的每一个节点都对应一个Object对应
 type Object interface {
-	Parent() *Scope  // scope in which this object is declared; nil for methods and struct fields
-	Pos() syntax.Pos // position of object identifier in declaration
-	Pkg() *Package   // package to which this object belongs; nil for labels and objects in the Universe scope
+	Parent() *Scope  // 对象所在作用域 scope in which this object is declared; nil for methods and struct fields
+	Pos() syntax.Pos // 对象在声明中的位置 position of object identifier in declaration
+	Pkg() *Package   // 对象属于的包 package to which this object belongs; nil for labels and objects in the Universe scope
 	Name() string    // package local object name
-	Type() Type      // object type
-	Exported() bool  // reports whether the name starts with a capital letter
-	Id() string      // object name if exported, qualified name if not exported (see func Id)
+	Type() Type      // 对象的类型，最重要的东西 object type
+	Exported() bool  // 对象是否是public的 reports whether the name starts with a capital letter
+	Id() string      // object是public的话就是对象名字，否则是qualified名（包名+"."+obj 的名字） object name if exported, qualified name if not exported (see func Id)
 
 	// String returns a human-readable string of the object.
 	String() string
@@ -32,6 +33,7 @@ type Object interface {
 	// a is before object b in the source, then a.order() < b.order().
 	// order returns a value > 0 for package-level objects; it returns
 	// 0 for all other objects (including objects in file scopes).
+	// 对象在源代码中的顺序，order越小，说明顺序越靠前。包级别的对象order>0,其它所有的对象返回0
 	order() uint32
 
 	// color returns the object's color.
@@ -50,15 +52,18 @@ type Object interface {
 	setParent(*Scope)
 
 	// sameId reports whether obj.Id() and Id(pkg, name) are the same.
+	// 判断俩id（该对象的Id方法，和外边的ID函数返回值）是否相同
 	sameId(pkg *Package, name string) bool
 
 	// scopePos returns the start position of the scope of this Object
+	// 对象作用域的起始位置
 	scopePos() syntax.Pos
 
 	// setScopePos sets the start position of the scope for this Object.
 	setScopePos(pos syntax.Pos)
 }
 
+// 是不是导出的字段
 func isExported(name string) bool {
 	ch, _ := utf8.DecodeRuneInString(name)
 	return unicode.IsUpper(ch)
@@ -66,6 +71,7 @@ func isExported(name string) bool {
 
 // Id returns name if it is exported, otherwise it
 // returns the name qualified with the package path.
+// object是public的话就是对象名字，否则是qualified名（包名+"."+obj 的名字）
 func Id(pkg *Package, name string) string {
 	if isExported(name) {
 		return name
@@ -85,6 +91,7 @@ func Id(pkg *Package, name string) string {
 }
 
 // An object implements the common parts of an Object.
+// Object接口实现的通用部分，所有object的实现都会内嵌这个类型
 type object struct {
 	parent    *Scope
 	pos       syntax.Pos
@@ -97,6 +104,7 @@ type object struct {
 }
 
 // color encodes the color of an object (see Checker.objDecl for details).
+// 对象循环依赖检查 ，就是GC呗
 type color uint32
 
 // An object may be painted in one of three colors.
@@ -120,6 +128,7 @@ func (c color) String() string {
 
 // colorFor returns the (initial) color for an object depending on
 // whether its type t is known or not.
+// 根据type返回object的初始颜色
 func colorFor(t Type) color {
 	if t != nil {
 		return black
@@ -190,6 +199,7 @@ func (obj *object) sameId(pkg *Package, name string) bool {
 // Objects are ordered nil before non-nil, exported before
 // non-exported, then by name, and finally (for non-exported
 // functions) by package height and path.
+// 对象a是否在对象b之前声明
 func (a *object) less(b *object) bool {
 	if a == b {
 		return false
@@ -226,6 +236,7 @@ func (a *object) less(b *object) bool {
 
 // A PkgName represents an imported Go package.
 // PkgNames don't have a type.
+// 实现了object接口，代表一个被导入的go包，它没有类型。就是import后面那个
 type PkgName struct {
 	object
 	imported *Package
@@ -240,9 +251,11 @@ func NewPkgName(pos syntax.Pos, pkg *Package, name string, imported *Package) *P
 
 // Imported returns the package that was imported.
 // It is distinct from Pkg(), which is the package containing the import statement.
+// 返回被导入的go包
 func (obj *PkgName) Imported() *Package { return obj.imported }
 
 // A Const represents a declared constant.
+// 实现了Object接口，常量声明语句
 type Const struct {
 	object
 	val constant.Value
@@ -255,11 +268,13 @@ func NewConst(pos syntax.Pos, pkg *Package, name string, typ Type, val constant.
 }
 
 // Val returns the constant's value.
+// 返回常量值
 func (obj *Const) Val() constant.Value { return obj.val }
 
 func (*Const) isDependency() {} // a constant may be a dependency of an initialization expression
 
 // A TypeName represents a name for a (defined or alias) type.
+// 使用type关键字定义的名字或者别名
 type TypeName struct {
 	object
 }
@@ -284,6 +299,7 @@ func NewTypeNameLazy(pos syntax.Pos, pkg *Package, name string, load func(named 
 }
 
 // IsAlias reports whether obj is an alias name for a type.
+// 判断obj是否是一个类型别名
 func (obj *TypeName) IsAlias() bool {
 	switch t := obj.typ.(type) {
 	case nil:
@@ -320,11 +336,13 @@ type Var struct {
 
 // NewVar returns a new variable.
 // The arguments set the attributes found with all Objects.
+// 返回一个变量
 func NewVar(pos syntax.Pos, pkg *Package, name string, typ Type) *Var {
 	return &Var{object: object{nil, pos, pkg, name, typ, 0, colorFor(typ), nopos}}
 }
 
 // NewParam returns a new variable representing a function parameter.
+// 返回一个代表函数参数的var
 func NewParam(pos syntax.Pos, pkg *Package, name string, typ Type) *Var {
 	return &Var{object: object{nil, pos, pkg, name, typ, 0, colorFor(typ), nopos}, used: true} // parameters are always 'used'
 }
@@ -332,18 +350,22 @@ func NewParam(pos syntax.Pos, pkg *Package, name string, typ Type) *Var {
 // NewField returns a new variable representing a struct field.
 // For embedded fields, the name is the unqualified type name
 // under which the field is accessible.
+// 返回一个结构体变量字段
 func NewField(pos syntax.Pos, pkg *Package, name string, typ Type, embedded bool) *Var {
 	return &Var{object: object{nil, pos, pkg, name, typ, 0, colorFor(typ), nopos}, embedded: embedded, isField: true}
 }
 
 // Anonymous reports whether the variable is an embedded field.
 // Same as Embedded; only present for backward-compatibility.
+// 是否是嵌入字段
 func (obj *Var) Anonymous() bool { return obj.embedded }
 
 // Embedded reports whether the variable is an embedded field.
+// 是否是嵌入字段
 func (obj *Var) Embedded() bool { return obj.embedded }
 
 // IsField reports whether the variable is a struct field.
+// 是否是结构体的一个字段
 func (obj *Var) IsField() bool { return obj.isField }
 
 // Origin returns the canonical Var for its receiver, i.e. the Var object
@@ -353,6 +375,7 @@ func (obj *Var) IsField() bool { return obj.isField }
 // function parameters that depend on type arguments), this will be the
 // corresponding Var on the generic (uninstantiated) type. For all other Vars
 // Origin returns the receiver.
+// 返回receiver或者泛型？
 func (obj *Var) Origin() *Var {
 	if obj.origin != nil {
 		return obj.origin
@@ -365,6 +388,7 @@ func (*Var) isDependency() {} // a variable may be a dependency of an initializa
 // A Func represents a declared function, concrete method, or abstract
 // (interface) method. Its Type() is always a *Signature.
 // An abstract method may belong to many interfaces due to embedding.
+// 函数，方法，或者接口的抽象方法，type永远是Signature
 type Func struct {
 	object
 	hasPtrRecv_ bool  // only valid for methods that don't have a type yet; use hasPtrRecv() to read
@@ -402,6 +426,7 @@ func (obj *Func) Scope() *Scope { return obj.typ.(*Signature).scope }
 // instantiated Named type or interface methods that depend on type arguments),
 // this will be the corresponding Func on the generic (uninstantiated) type.
 // For all other Funcs Origin returns the receiver.
+// 返回函数receiver或者泛型
 func (obj *Func) Origin() *Func {
 	if obj.origin != nil {
 		return obj.origin
@@ -410,6 +435,7 @@ func (obj *Func) Origin() *Func {
 }
 
 // hasPtrRecv reports whether the receiver is of the form *T for the given method obj.
+// 函数receiver是否是指针类型
 func (obj *Func) hasPtrRecv() bool {
 	// If a method's receiver type is set, use that as the source of truth for the receiver.
 	// Caution: Checker.funcDecl (decl.go) marks a function by setting its type to an empty
@@ -432,6 +458,7 @@ func (*Func) isDependency() {} // a function may be a dependency of an initializ
 
 // A Label represents a declared label.
 // Labels don't have a type.
+// 代表label，没有type
 type Label struct {
 	object
 	used bool // set if the label was used
@@ -444,6 +471,7 @@ func NewLabel(pos syntax.Pos, pkg *Package, name string) *Label {
 
 // A Builtin represents a built-in function.
 // Builtins don't have a valid type.
+// 内建函数，没有type
 type Builtin struct {
 	object
 	id builtinId
@@ -454,10 +482,12 @@ func newBuiltin(id builtinId) *Builtin {
 }
 
 // Nil represents the predeclared value nil.
+// 代表nil
 type Nil struct {
 	object
 }
 
+// 把对象字符串化写到buf中
 func writeObject(buf *bytes.Buffer, obj Object, qf Qualifier) {
 	var tname *TypeName
 	typ := obj.Type()
@@ -489,8 +519,10 @@ func writeObject(buf *bytes.Buffer, obj Object, qf Qualifier) {
 
 	case *Func:
 		buf.WriteString("func ")
+		// 写函数名
 		writeFuncName(buf, obj, qf)
 		if typ != nil {
+			// 写函数签名
 			WriteSignature(buf, typ.(*Signature), qf)
 		}
 		return
@@ -556,6 +588,7 @@ func writeObject(buf *bytes.Buffer, obj Object, qf Qualifier) {
 	WriteType(buf, typ, qf)
 }
 
+// 把包的路径写进去（就是导入这个包的时候使用的路径）
 func writePackage(buf *bytes.Buffer, pkg *Package, qf Qualifier) {
 	if pkg == nil {
 		return
@@ -575,6 +608,7 @@ func writePackage(buf *bytes.Buffer, pkg *Package, qf Qualifier) {
 // ObjectString returns the string form of obj.
 // The Qualifier controls the printing of
 // package-level objects, and may be nil.
+// 返回object的string
 func ObjectString(obj Object, qf Qualifier) string {
 	var buf bytes.Buffer
 	writeObject(&buf, obj, qf)
@@ -590,6 +624,7 @@ func (obj *Label) String() string    { return ObjectString(obj, nil) }
 func (obj *Builtin) String() string  { return ObjectString(obj, nil) }
 func (obj *Nil) String() string      { return ObjectString(obj, nil) }
 
+// 写函数名，格式是 receiver/package.functionName
 func writeFuncName(buf *bytes.Buffer, f *Func, qf Qualifier) {
 	if f.typ != nil {
 		sig := f.typ.(*Signature)

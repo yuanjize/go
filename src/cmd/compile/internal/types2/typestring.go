@@ -59,6 +59,7 @@ func typeString(typ Type, qf Qualifier, debug bool) string {
 // WriteType writes the string representation of typ to buf.
 // The Qualifier controls the printing of
 // package-level objects, and may be nil.
+// 写type进去
 func WriteType(buf *bytes.Buffer, typ Type, qf Qualifier) {
 	newTypeWriter(buf, qf).typ(typ)
 }
@@ -67,6 +68,7 @@ func WriteType(buf *bytes.Buffer, typ Type, qf Qualifier) {
 // without a leading "func" keyword.
 // The Qualifier controls the printing of
 // package-level objects, and may be nil.
+// 写函数签名
 func WriteSignature(buf *bytes.Buffer, sig *Signature, qf Qualifier) {
 	newTypeWriter(buf, qf).signature(sig)
 }

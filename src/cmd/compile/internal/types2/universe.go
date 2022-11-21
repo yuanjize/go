@@ -13,7 +13,7 @@ import (
 
 // The Universe scope contains all predeclared objects of Go.
 // It is the outermost scope of any chain of nested scopes.
-var Universe *Scope
+var Universe *Scope // 全局作用域，在语言任何地方都可以使用的,看初始化就是个空作用域
 
 // The Unsafe package is the package returned by an importer
 // for the import path "unsafe".

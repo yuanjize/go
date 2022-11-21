@@ -91,6 +91,7 @@ func isNonTypeParamInterface(t Type) bool {
 }
 
 // isTypeParam reports whether t is a type parameter.
+// 是否是类型参数
 func isTypeParam(t Type) bool {
 	_, ok := t.(*TypeParam)
 	return ok

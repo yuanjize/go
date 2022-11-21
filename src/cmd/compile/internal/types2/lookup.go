@@ -461,6 +461,7 @@ func (check *Checker) newAssertableTo(V *Interface, T Type) error {
 
 // deref dereferences typ if it is a *Pointer and returns its base and true.
 // Otherwise it returns (typ, false).
+// 获取指针类型指向的类型，返回值1是指针引用的类型（如果不是指针就是真正类型），返回值2返回传进来的类型是不是指针类型
 func deref(typ Type) (Type, bool) {
 	if p, _ := typ.(*Pointer); p != nil {
 		// p.base should never be nil, but be conservative
