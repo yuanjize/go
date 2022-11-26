@@ -10,8 +10,15 @@ package types2
 //	 𝓤:  &term{}          == 𝓤                      // set of all types (𝓤niverse)
 //	 T:  &term{false, T}  == {T}                    // set of type T
 //	~t:  &term{true, t}   == {t' | under(t') == t}  // set of types with underlying type t
+// 代表范性类型集合
+/*
+  *term空指针，代表是空集
+  &term{},代表全集
+  &term{false, T} 代表集合里面只有一个元素是类型T
+  &term{true, t}代表集合里面的元素包括t和底层类型是t的元素
+*/
 type term struct {
-	tilde bool // valid if typ != nil
+	tilde bool // valid if typ != nil是否带～
 	typ   Type
 }
 
@@ -29,6 +36,7 @@ func (x *term) String() string {
 }
 
 // equal reports whether x and y represent the same type set.
+// 是否俩人表示相同的类型范围
 func (x *term) equal(y *term) bool {
 	// easy cases
 	switch {
@@ -43,6 +51,7 @@ func (x *term) equal(y *term) bool {
 }
 
 // union returns the union x ∪ y: zero, one, or two non-nil terms.
+// x和y的并集
 func (x *term) union(y *term) (_, _ *term) {
 	// easy cases
 	switch {
@@ -75,6 +84,7 @@ func (x *term) union(y *term) (_, _ *term) {
 }
 
 // intersect returns the intersection x ∩ y.
+// 取x和y的交集
 func (x *term) intersect(y *term) *term {
 	// easy cases
 	switch {
@@ -103,6 +113,7 @@ func (x *term) intersect(y *term) *term {
 }
 
 // includes reports whether t ∈ x.
+// t是否属于x范围内
 func (x *term) includes(t Type) bool {
 	// easy cases
 	switch {
@@ -121,6 +132,7 @@ func (x *term) includes(t Type) bool {
 }
 
 // subsetOf reports whether x ⊆ y.
+// x是否是y的子集
 func (x *term) subsetOf(y *term) bool {
 	// easy cases
 	switch {
@@ -149,6 +161,7 @@ func (x *term) subsetOf(y *term) bool {
 
 // disjoint reports whether x ∩ y == ∅.
 // x.typ and y.typ must not be nil.
+// x和y是否有重合的部分，就是x和y交集不为空
 func (x *term) disjoint(y *term) bool {
 	if debug && (x.typ == nil || y.typ == nil) {
 		panic("invalid argument(s)")

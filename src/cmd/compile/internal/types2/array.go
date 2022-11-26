@@ -5,6 +5,7 @@
 package types2
 
 // An Array represents an array type.
+// 数组类型实现了type接口
 type Array struct {
 	len  int64
 	elem Type

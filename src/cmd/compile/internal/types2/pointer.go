@@ -5,6 +5,7 @@
 package types2
 
 // A Pointer represents a pointer type.
+// 指针类型，实现了type接口
 type Pointer struct {
 	base Type // element type
 }

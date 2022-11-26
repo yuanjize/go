@@ -5,6 +5,7 @@
 package types2
 
 // A Slice represents a slice type.
+// 切片类型，实现type接口
 type Slice struct {
 	elem Type
 }

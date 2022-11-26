@@ -30,7 +30,7 @@ const (
 	String
 	UnsafePointer
 
-	// types for untyped values
+	// types for untyped values 无类型的值，声明const变量的时候不指定类型会自动推导出来untyped的类型
 	UntypedBool
 	UntypedInt
 	UntypedRune
@@ -63,10 +63,11 @@ const (
 )
 
 // A Basic represents a basic type.
+// 实现了type接口,代表go的基础类型（布尔，数字类型，字符串类型等内置类型）
 type Basic struct {
-	kind BasicKind
-	info BasicInfo
-	name string
+	kind BasicKind // 具体的类型
+	info BasicInfo // 类型属性，是按位存储的（表示是否是数字类型。是否可排序，是否可以是常量）
+	name string    // 类型名称
 }
 
 // Kind returns the kind of basic type b.

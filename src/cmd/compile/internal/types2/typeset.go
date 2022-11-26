@@ -30,12 +30,15 @@ type _TypeSet struct {
 }
 
 // IsEmpty reports whether type set s is the empty set.
+// 一个类型都不包含
 func (s *_TypeSet) IsEmpty() bool { return s.terms.isEmpty() }
 
 // IsAll reports whether type set s is the set of all types (corresponding to the empty interface).
+// 是否是一个空接口（就是没有方法和类型的约束）
 func (s *_TypeSet) IsAll() bool { return s.IsMethodSet() && len(s.methods) == 0 }
 
 // IsMethodSet reports whether the interface t is fully described by its method set.
+// 是否接口完全由method定义的，就是没有类型约束
 func (s *_TypeSet) IsMethodSet() bool { return !s.comparable && s.terms.isAll() }
 
 // IsComparable reports whether each type in the set is comparable.

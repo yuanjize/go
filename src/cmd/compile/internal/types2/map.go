@@ -5,6 +5,7 @@
 package types2
 
 // A Map represents a map type.
+// map类型，实现了type接口
 type Map struct {
 	key, elem Type
 }

@@ -22,6 +22,7 @@ type Struct struct {
 // If a field with index i has a tag, tags[i] must be that tag, but len(tags) may be
 // only as long as required to hold the tag with the largest index i. Consequently,
 // if no field has a tag, tags may be nil.
+// Struct类型，实现了type接口
 func NewStruct(fields []*Var, tags []string) *Struct {
 	var fset objset
 	for _, f := range fields {

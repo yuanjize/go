@@ -6,6 +6,7 @@ package types2
 
 // A Type represents a type of Go.
 // All types implement the Type interface.
+// 代表golang的左右类型
 type Type interface {
 	// Underlying returns the underlying type of a type.
 	Underlying() Type

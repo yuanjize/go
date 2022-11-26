@@ -5,15 +5,17 @@
 package types2
 
 // A Chan represents a channel type.
+// chan类型，实现了type接口
 type Chan struct {
-	dir  ChanDir
-	elem Type
+	dir  ChanDir // 数据方向
+	elem Type    // 类型
 }
 
 // A ChanDir value indicates a channel direction.
 type ChanDir int
 
 // The direction of a channel is indicated by one of these constants.
+// 数据读写方向
 const (
 	SendRecv ChanDir = iota
 	SendOnly
