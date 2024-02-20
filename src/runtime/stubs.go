@@ -57,7 +57,7 @@ func mcall(fn func(*g))
 //	... use x ...
 //
 //go:noescape
-func systemstack(fn func())
+func systemstack(fn func()) // fn在线程的栈山上执行，不在协程(除了g0)的栈上
 
 //go:nosplit
 //go:nowritebarrierrec
@@ -408,7 +408,7 @@ func call1073741824(typ, fn, stackArgs unsafe.Pointer, stackArgsSize, stackRetOf
 
 func systemstack_switch()
 
-// alignUp rounds n up to a multiple of a. a must be a power of 2.
+// alignUp rounds n up to a multiple of a. a must be a power of 2. //2的n次幂对其
 func alignUp(n, a uintptr) uintptr {
 	return (n + a - 1) &^ (a - 1)
 }

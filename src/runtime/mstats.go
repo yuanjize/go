@@ -619,7 +619,7 @@ func flushallmcaches() {
 // sysMemStat represents a global system statistic that is managed atomically.
 //
 // This type must structurally be a uint64 so that mstats aligns with MemStats.
-type sysMemStat uint64
+type sysMemStat uint64 //记录某个内存指标
 
 // load atomically reads the value of the stat.
 //

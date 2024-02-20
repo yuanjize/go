@@ -28,17 +28,18 @@ import (
 //
 // Consider marking fixalloc'd types not in heap by embedding
 // runtime/internal/sys.NotInHeap.
+// 只能分配固定size大小的内存分配器
 type fixalloc struct {
-	size   uintptr
-	first  func(arg, p unsafe.Pointer) // called first time p is returned
-	arg    unsafe.Pointer
-	list   *mlink
-	chunk  uintptr // use uintptr instead of unsafe.Pointer to avoid write barriers
-	nchunk uint32  // bytes remaining in current chunk
-	nalloc uint32  // size of new chunks in bytes
-	inuse  uintptr // in-use bytes now
-	stat   *sysMemStat
-	zero   bool // zero allocations
+	size   uintptr                     // 每次分配的内存大小
+	first  func(arg, p unsafe.Pointer) // 回调函数,分配的内存第一次返回的时候调用 called first time p is returned
+	arg    unsafe.Pointer              // first的参数
+	list   *mlink                      // 调用free的时候，释放的内存会放在这里
+	chunk  uintptr                     // 当前chunk指针，指向剩余的free的字节 use uintptr instead of unsafe.Pointer to avoid write barriers
+	nchunk uint32                      // 当前chunk还剩下多少字节 bytes remaining in current chunk
+	nalloc uint32                      // size of new chunks in bytes // 每个新chunk的大小
+	inuse  uintptr                     // in-use bytes now 当前fixalloc中有多少正在使用的字节
+	stat   *sysMemStat                 // 一个原子变量用来记录某个内存指标
+	zero   bool                        // 是否为分配的内存块清零zero allocations
 }
 
 // A generic linked list of blocks.  (Typically the block is bigger than sizeof(MLink).)
@@ -46,49 +47,62 @@ type fixalloc struct {
 // this cannot be used by some of the internal GC structures. For example when
 // the sweeper is placing an unmarked object on the free list it does not want the
 // write barrier to be called since that could result in the object being reachable.
-type mlink struct {
+type mlink struct { // 每块内存size不会比这个小，是和分配的内存公用一块内存，相当于C的联合
 	_    sys.NotInHeap
 	next *mlink
 }
 
+func MyPrintStack() {
+	buf := make([]byte, 1024)
+	for {
+		n := Stack(buf, false)
+		if n < len(buf) {
+			println(string(buf[:n]))
+			return
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
 // Initialize f to allocate objects of the given size,
-// using the allocator to obtain chunks of memory.
+// using the allocator to obtain chunks of memory. // 主要是根据size算出来每个chunk的大小
 func (f *fixalloc) init(size uintptr, first func(arg, p unsafe.Pointer), arg unsafe.Pointer, stat *sysMemStat) {
-	if size > _FixAllocChunk {
+	if size > _FixAllocChunk { //大小不能超过16K
 		throw("runtime: fixalloc size too large")
 	}
-	if min := unsafe.Sizeof(mlink{}); size < min {
+	if min := unsafe.Sizeof(mlink{}); size < min { //因为分配的内存和该结构体用的一块内存
 		size = min
 	}
 
-	f.size = size
-	f.first = first
-	f.arg = arg
+	f.size = size   // 每次分配的内存大小
+	f.first = first // 一个回调函数
+	f.arg = arg     // 传递给first函数的参数
 	f.list = nil
 	f.chunk = 0
 	f.nchunk = 0
-	f.nalloc = uint32(_FixAllocChunk / size * size) // Round _FixAllocChunk down to an exact multiple of size to eliminate tail waste
+	f.nalloc = uint32(_FixAllocChunk / size * size) // 每个chunk的大小，该算法保证chunk大小是size的整数倍，避免内存浪费 Round _FixAllocChunk down to an exact multiple of size to eliminate tail waste
 	f.inuse = 0
 	f.stat = stat
 	f.zero = true
 }
 
+// 分配一个size大小的内存
 func (f *fixalloc) alloc() unsafe.Pointer {
 	if f.size == 0 {
 		print("runtime: use of FixAlloc_Alloc before FixAlloc_Init\n")
 		throw("runtime: internal error")
 	}
 
-	if f.list != nil {
+	if f.list != nil { //先看看之前释放的内存列表有没有，有的话直接返回回去
 		v := unsafe.Pointer(f.list)
 		f.list = f.list.next
 		f.inuse += f.size
 		if f.zero {
-			memclrNoHeapPointers(v, f.size)
+			memclrNoHeapPointers(v, f.size) //内存清零
 		}
 		return v
 	}
-	if uintptr(f.nchunk) < f.size {
+	if uintptr(f.nchunk) < f.size { // 不够用的，创建一个新的chunk
 		f.chunk = uintptr(persistentalloc(uintptr(f.nalloc), 0, f.stat))
 		f.nchunk = f.nalloc
 	}
@@ -97,15 +111,16 @@ func (f *fixalloc) alloc() unsafe.Pointer {
 	if f.first != nil {
 		f.first(f.arg, v)
 	}
-	f.chunk = f.chunk + f.size
-	f.nchunk -= uint32(f.size)
-	f.inuse += f.size
+	f.chunk = f.chunk + f.size //chunk指针后移
+	f.nchunk -= uint32(f.size) // 当前chunk剩余空间减少
+	f.inuse += f.size          // 所有正在使用byte数量
 	return v
 }
 
+// 释放内存。释放的内存放到list中
 func (f *fixalloc) free(p unsafe.Pointer) {
 	f.inuse -= f.size
 	v := (*mlink)(p)
-	v.next = f.list
+	v.next = f.list // 释放的内存放到list中
 	f.list = v
 }

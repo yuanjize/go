@@ -1389,7 +1389,7 @@ var persistentChunks *notInHeap
 // runtime/internal/sys.NotInHeap.
 func persistentalloc(size, align uintptr, sysStat *sysMemStat) unsafe.Pointer {
 	var p *notInHeap
-	systemstack(func() {
+	systemstack(func() { //在线程栈上执行
 		p = persistentalloc1(size, align, sysStat)
 	})
 	return unsafe.Pointer(p)
@@ -1424,13 +1424,13 @@ func persistentalloc1(size, align uintptr, sysStat *sysMemStat) *notInHeap {
 
 	mp := acquirem()
 	var persistent *persistentAlloc
-	if mp != nil && mp.p != 0 {
+	if mp != nil && mp.p != 0 { // p有用就用p上带的，否则用全局的
 		persistent = &mp.p.ptr().palloc
 	} else {
 		lock(&globalAlloc.mutex)
 		persistent = &globalAlloc.persistentAlloc
 	}
-	persistent.off = alignUp(persistent.off, align)
+	persistent.off = alignUp(persistent.off, align) //2 n次幂对齐
 	if persistent.off+size > persistentChunkSize || persistent.base == nil {
 		persistent.base = (*notInHeap)(sysAlloc(persistentChunkSize, &memstats.other_sys))
 		if persistent.base == nil {
