@@ -14,6 +14,7 @@ import (
 // A spanSet is a set of *mspans.
 //
 // spanSet is safe for concurrent push and pop operations.
+// spanSet里面有很多spanSetBlock每个spanSetBlock里面有很多mspan
 type spanSet struct {
 	// A spanSet is a two-level data structure consisting of a
 	// growable spine that points to fixed-sized blocks. The spine
@@ -33,9 +34,9 @@ type spanSet struct {
 	// anyway. (In principle, we could do this during STW.)
 
 	spineLock mutex
-	spine     atomicSpanSetSpinePointer // *[N]atomic.Pointer[spanSetBlock]
-	spineLen  atomic.Uintptr            // Spine array length
-	spineCap  uintptr                   // Spine array cap, accessed under spineLock
+	spine     atomicSpanSetSpinePointer // *[N]atomic.Pointer[spanSetBlock]  指向spanSetBlock数组起始地址
+	spineLen  atomic.Uintptr            // Spine array length  spanSetBlock数组长度
+	spineCap  uintptr                   // Spine array cap, accessed under spineLock spanSetBlock数组容量
 
 	// index is the head and tail of the spanSet in a single field.
 	// The head and the tail both represent an index into the logical
@@ -48,7 +49,7 @@ type spanSet struct {
 	// span in the heap were stored in this set, and each span were
 	// the minimum size (1 runtime page, 8 KiB), then roughly the
 	// smallest heap which would be unrepresentable is 32 TiB in size.
-	index atomicHeadTailIndex
+	index atomicHeadTailIndex //spanSet的headindex和tailindex
 }
 
 const (
@@ -66,14 +67,16 @@ type spanSetBlock struct {
 	popped atomic.Uint32
 
 	// spans is the set of spans in this block.
-	spans [spanSetBlockEntries]atomicMSpanPointer
+	spans [spanSetBlockEntries]atomicMSpanPointer //一个block可以放spanSetBlockEntries个mspan
 }
 
 // push adds span s to buffer b. push is safe to call concurrently
 // with other push and pop operations.
+// push一个mspan到集合中
 func (b *spanSet) push(s *mspan) {
 	// Obtain our slot.
 	cursor := uintptr(b.index.incTail().tail() - 1)
+	// top是对应的setblock的索引，bottom是在setblock内部的偏移量
 	top, bottom := cursor/spanSetBlockEntries, cursor%spanSetBlockEntries
 
 	// Do we need to add a block?
@@ -81,7 +84,7 @@ func (b *spanSet) push(s *mspan) {
 	var block *spanSetBlock
 retry:
 	if top < spineLen {
-		block = b.spine.Load().lookup(top).Load()
+		block = b.spine.Load().lookup(top).Load() //拿到top索引的spanBlock
 	} else {
 		// Add a new block to the spine, potentially growing
 		// the spine.
@@ -89,20 +92,22 @@ retry:
 		// spineLen cannot change until we release the lock,
 		// but may have changed while we were waiting.
 		spineLen = b.spineLen.Load()
-		if top < spineLen {
+		if top < spineLen { // spansetblock足够，重新尝试获取
 			unlock(&b.spineLock)
 			goto retry
 		}
 
 		spine := b.spine.Load()
+		//spanSetBlock 数组容量不够，需要扩容
 		if spineLen == b.spineCap {
 			// Grow the spine.
 			newCap := b.spineCap * 2
 			if newCap == 0 {
 				newCap = spanSetInitSpineCap
 			}
+			// 创建新的spanSetBlock数组
 			newSpine := persistentalloc(newCap*goarch.PtrSize, cpu.CacheLineSize, &memstats.gcMiscSys)
-			if b.spineCap != 0 {
+			if b.spineCap != 0 { // 老数据拷贝进去
 				// Blocks are allocated off-heap, so
 				// no write barriers.
 				memmove(newSpine, spine.p, b.spineCap*goarch.PtrSize)
@@ -122,10 +127,12 @@ retry:
 		}
 
 		// Allocate a new block from the pool.
+		// 从池子中分配一个/池子中没有会自动创建
 		block = spanSetBlockPool.alloc()
 
 		// Add it to the spine.
 		// Blocks are allocated off-heap, so no write barrier.
+		// 存到数组中
 		spine.lookup(top).StoreNoWB(block)
 		b.spineLen.Store(spineLen + 1)
 		unlock(&b.spineLock)
@@ -133,11 +140,13 @@ retry:
 
 	// We have a block. Insert the span atomically, since there may be
 	// concurrent readers via the block API.
+	// mspan放到block指定偏移位置
 	block.spans[bottom].StoreNoWB(s)
 }
 
 // pop removes and returns a span from buffer b, or nil if b is empty.
 // pop is safe to call concurrently with other pop and push operations.
+// 从spanset中拿出来一个mspan，如果没有返回null
 func (b *spanSet) pop() *mspan {
 	var head, tail uint32
 claimLoop:
@@ -210,6 +219,7 @@ claimLoop:
 	// pushers (there can't be any). Note that we may not be the popper
 	// which claimed the last slot in the block, we're just the last one
 	// to finish popping.
+	// block里面一个mspan都没有了，直接回收
 	if block.popped.Add(1) == spanSetBlockEntries {
 		// Clear the block's pointer.
 		blockp.StoreNoWB(nil)
@@ -290,11 +300,13 @@ func (s *atomicSpanSetSpinePointer) StoreNoWB(p spanSetSpinePointer) {
 }
 
 // spanSetSpinePointer represents a pointer to a contiguous block of atomic.Pointer[spanSetBlock].
+// spanSetSpinePointer.p 可以认为是指向[]spanSetBlock第一个元素的指针
 type spanSetSpinePointer struct {
 	p unsafe.Pointer
 }
 
 // lookup returns &s[idx].
+// 返[]spanSetBlock的第N个元素
 func (s spanSetSpinePointer) lookup(idx uintptr) *atomic.Pointer[spanSetBlock] {
 	return (*atomic.Pointer[spanSetBlock])(add(unsafe.Pointer(s.p), goarch.PtrSize*idx))
 }
@@ -303,12 +315,14 @@ func (s spanSetSpinePointer) lookup(idx uintptr) *atomic.Pointer[spanSetBlock] {
 var spanSetBlockPool spanSetBlockAlloc
 
 // spanSetBlockAlloc represents a concurrent pool of spanSetBlocks.
+// spanSetBlock池，负责缓存和分配spanSetBlock
 type spanSetBlockAlloc struct {
 	stack lfstack
 }
 
 // alloc tries to grab a spanSetBlock out of the pool, and if it fails
 // persistentallocs a new one and returns it.
+// stack中有就直接返回，没有就需要创建一个spanSetBlock
 func (p *spanSetBlockAlloc) alloc() *spanSetBlock {
 	if s := (*spanSetBlock)(p.stack.pop()); s != nil {
 		return s
@@ -317,6 +331,7 @@ func (p *spanSetBlockAlloc) alloc() *spanSetBlock {
 }
 
 // free returns a spanSetBlock back to the pool.
+// spanSetBlock 放回池子中
 func (p *spanSetBlockAlloc) free(block *spanSetBlock) {
 	block.popped.Store(0)
 	p.stack.push(&block.lfnode)
@@ -324,6 +339,7 @@ func (p *spanSetBlockAlloc) free(block *spanSetBlock) {
 
 // haidTailIndex represents a combined 32-bit head and 32-bit tail
 // of a queue into a single 64-bit value.
+// 两个32位数存到64位数中，高32位代表head，低32位数代表tail。该类型提供了工具函数来设置和返回head和tail
 type headTailIndex uint64
 
 // makeHeadTailIndex creates a headTailIndex value from a separate
@@ -348,6 +364,7 @@ func (h headTailIndex) split() (head uint32, tail uint32) {
 }
 
 // atomicHeadTailIndex is an atomically-accessed headTailIndex.
+// 原子读写headTailIndex
 type atomicHeadTailIndex struct {
 	u atomic.Uint64
 }

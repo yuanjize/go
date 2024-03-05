@@ -80,6 +80,8 @@ type mheap struct {
 	// store. Accesses during STW might not hold the lock, but
 	// must ensure that allocation cannot happen around the
 	// access (since that may free the backing store).
+	// 所有被使用过的mspan都在这（包括正在使用的和使用过之后放回池子里面的）
+	// put动做是recordspan函数执行的
 	allspans []*mspan // all spans out there
 
 	// Proportional sweep
@@ -195,13 +197,13 @@ type mheap struct {
 		pad      [(cpu.CacheLinePadSize - unsafe.Sizeof(mcentral{})%cpu.CacheLinePadSize) % cpu.CacheLinePadSize]byte
 	}
 
-	spanalloc             fixalloc // allocator for span*
-	cachealloc            fixalloc // allocator for mcache*
-	specialfinalizeralloc fixalloc // allocator for specialfinalizer*
-	specialprofilealloc   fixalloc // allocator for specialprofile*
-	specialReachableAlloc fixalloc // allocator for specialReachable
+	spanalloc             fixalloc // allocator for span* 用来为mspan分配空间
+	cachealloc            fixalloc // allocator for mcache* 用来为mcache分配空间
+	specialfinalizeralloc fixalloc // allocator for specialfinalizer* 用来为specialfinalizer分配空间
+	specialprofilealloc   fixalloc // allocator for specialprofile* 用来为specialprofile分配空间
+	specialReachableAlloc fixalloc // allocator for specialReachable 用来为specialReachable分配空间
 	speciallock           mutex    // lock for special record allocators.
-	arenaHintAlloc        fixalloc // allocator for arenaHints
+	arenaHintAlloc        fixalloc // allocator for arenaHints 用来为arenaHint分配空间
 
 	// User arena state.
 	//
@@ -402,14 +404,15 @@ type mSpanList struct {
 	last  *mspan // last span in list, or nil if none
 }
 
+// 一个固定大小的基本单位，所有的对象内存都从这个上面取
 type mspan struct {
 	_    sys.NotInHeap
 	next *mspan     // next span in list, or nil if none
 	prev *mspan     // previous span in list, or nil if none
 	list *mSpanList // For debugging. TODO: Remove.
 
-	startAddr uintptr // address of first byte of span aka s.base()
-	npages    uintptr // number of pages in span
+	startAddr uintptr // address of first byte of span aka s.base() mspan内存的起始地址
+	npages    uintptr // number of pages in span mspan包含多少个page
 
 	manualFreeList gclinkptr // list of free objects in mSpanManual spans
 
@@ -428,10 +431,11 @@ type mspan struct {
 	// undefined and should never be referenced.
 	//
 	// Object n starts at address n*elemsize + (start << pageShift).
+	// 想从mspan找到一个空余的slot的时候，首先从freeindex开始扫描，freeindex可以认为是allocBits（一个bitmap）的索引，扫描到0的时候可以认为该位置表示的slot是free的
 	freeindex uintptr
 	// TODO: Look up nelems from sizeclass and remove this field if it
 	// helps performance.
-	nelems uintptr // number of object in the span.
+	nelems uintptr // number of object in the span. // span中对象/slot的数目(包括in-use和free的)
 
 	// Cache of the allocBits at freeindex. allocCache is shifted
 	// such that the lowest bit corresponds to the bit freeindex.
@@ -463,7 +467,7 @@ type mspan struct {
 	// The sweep will free the old allocBits and set allocBits to the
 	// gcmarkBits. The gcmarkBits are replaced with a fresh zeroed
 	// out memory.
-	allocBits  *gcBits
+	allocBits  *gcBits // bit序列，记录哪些slot是free的，哪些是in-use的
 	gcmarkBits *gcBits
 
 	// sweep generation:
@@ -476,14 +480,14 @@ type mspan struct {
 
 	sweepgen              uint32
 	divMul                uint32        // for divide by elemsize
-	allocCount            uint16        // number of allocated objects
+	allocCount            uint16        // number of allocated objects //inuse对象/slot的个数
 	spanclass             spanClass     // size class and noscan (uint8)
 	state                 mSpanStateBox // mSpanInUse etc; accessed atomically (get/set methods)
-	needzero              uint8         // needs to be zeroed before allocation
+	needzero              uint8         // needs to be zeroed before allocation  // 分配出去之前是否需要清零
 	isUserArenaChunk      bool          // whether or not this span represents a user arena
-	allocCountBeforeCache uint16        // a copy of allocCount that is stored just before this span is cached
-	elemsize              uintptr       // computed from sizeclass or from npages
-	limit                 uintptr       // end of data in span
+	allocCountBeforeCache uint16        // a copy of allocCount that is stored just before this span is cached span被cache之前使用这个变量来cache allocCount
+	elemsize              uintptr       // computed from sizeclass or from npages 根据sizeclass 和npages算出来的
+	limit                 uintptr       // end of data in span  span末尾
 	speciallock           mutex         // guards specials list
 	specials              *special      // linked list of special records sorted by offset.
 	userArenaChunkFree    addrRange     // interval for managing chunk allocation
@@ -494,9 +498,10 @@ type mspan struct {
 	// is allocated only when the object and the heap bits are
 	// initialized (see also the assignment of freeIndexForScan in
 	// mallocgc, and issue 54596).
-	freeIndexForScan uintptr
+	freeIndexForScan uintptr // 和freeindex差不多，freeindex是内存分配器用的，这个是gc用的
 }
 
+// 返回mspan的起始地址
 func (s *mspan) base() uintptr {
 	return s.startAddr
 }
@@ -521,36 +526,38 @@ func (s *mspan) layout() (size, n, total uintptr) {
 // this.
 //
 // The heap lock must be held.
+// 把新分配的span加入到mheap.allspans里面
 //
 //go:nowritebarrierrec
 func recordspan(vh unsafe.Pointer, p unsafe.Pointer) {
-	h := (*mheap)(vh)
-	s := (*mspan)(p)
+	h := (*mheap)(vh) // mheap
+	s := (*mspan)(p)  // 新分配的span
 
 	assertLockHeld(&h.lock)
 
-	if len(h.allspans) >= cap(h.allspans) {
+	if len(h.allspans) >= cap(h.allspans) { //需要切片扩容
 		n := 64 * 1024 / goarch.PtrSize
 		if n < cap(h.allspans)*3/2 {
 			n = cap(h.allspans) * 3 / 2
 		}
 		var new []*mspan
 		sp := (*slice)(unsafe.Pointer(&new))
-		sp.array = sysAlloc(uintptr(n)*goarch.PtrSize, &memstats.other_sys)
+		sp.array = sysAlloc(uintptr(n)*goarch.PtrSize, &memstats.other_sys) //分配新数组
 		if sp.array == nil {
 			throw("runtime: cannot allocate memory")
 		}
 		sp.len = len(h.allspans)
 		sp.cap = n
-		if len(h.allspans) > 0 {
+		if len(h.allspans) > 0 { //拷贝数据到新的切片
 			copy(new, h.allspans)
 		}
 		oldAllspans := h.allspans
 		*(*notInHeapSlice)(unsafe.Pointer(&h.allspans)) = *(*notInHeapSlice)(unsafe.Pointer(&new))
-		if len(oldAllspans) != 0 {
+		if len(oldAllspans) != 0 { // 释放老的切片
 			sysFree(unsafe.Pointer(&oldAllspans[0]), uintptr(cap(oldAllspans))*unsafe.Sizeof(oldAllspans[0]), &memstats.other_sys)
 		}
 	}
+	//新的mspan加入到切片中
 	h.allspans = h.allspans[:len(h.allspans)+1]
 	h.allspans[len(h.allspans)-1] = s
 }
@@ -746,7 +753,7 @@ func pageIndexOf(p uintptr) (arena *heapArena, pageIdx uintptr, pageMask uint8) 
 func (h *mheap) init() {
 	lockInit(&h.lock, lockRankMheap)
 	lockInit(&h.speciallock, lockRankMheapSpecial)
-
+	// 初始化常用struct的内存分配器
 	h.spanalloc.init(unsafe.Sizeof(mspan{}), recordspan, unsafe.Pointer(h), &memstats.mspan_sys)
 	h.cachealloc.init(unsafe.Sizeof(mcache{}), nil, nil, &memstats.mcache_sys)
 	h.specialfinalizeralloc.init(unsafe.Sizeof(specialfinalizer{}), nil, nil, &memstats.other_sys)

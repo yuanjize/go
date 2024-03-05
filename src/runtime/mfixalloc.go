@@ -108,7 +108,7 @@ func (f *fixalloc) alloc() unsafe.Pointer {
 	}
 
 	v := unsafe.Pointer(f.chunk)
-	if f.first != nil {
+	if f.first != nil { //该块size大小的内存第一次被从chunk中拿出来使用的时候
 		f.first(f.arg, v)
 	}
 	f.chunk = f.chunk + f.size //chunk指针后移

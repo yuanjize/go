@@ -40,8 +40,8 @@ type mcentral struct {
 	// to the appropriate swept list. As a result, the parts of the
 	// sweeper and mcentral that do consume from the unswept list may
 	// encounter swept spans, and these should be ignored.
-	partial [2]spanSet // list of spans with a free object
-	full    [2]spanSet // list of spans with no free objects
+	partial [2]spanSet // list of spans with a free object 有free空间的对象的span列表
+	full    [2]spanSet // list of spans with no free objects 无free空间的对象的span列表
 }
 
 // Initialize a single central free list.
@@ -78,9 +78,10 @@ func (c *mcentral) fullSwept(sweepgen uint32) *spanSet {
 }
 
 // Allocate a span to use in an mcache.
+// 拿一个mspan给mcache用
 func (c *mcentral) cacheSpan() *mspan {
 	// Deduct credit for this span allocation and sweep if necessary.
-	spanBytes := uintptr(class_to_allocnpages[c.spanclass.sizeclass()]) * _PageSize
+	spanBytes := uintptr(class_to_allocnpages[c.spanclass.sizeclass()]) * _PageSize // pageNumber * pageSize
 	deductSweepCredit(spanBytes, 0)
 
 	traceDone := false
@@ -108,7 +109,7 @@ func (c *mcentral) cacheSpan() *mspan {
 
 	// Try partial swept spans first.
 	sg := mheap_.sweepgen
-	if s = c.partialSwept(sg).pop(); s != nil {
+	if s = c.partialSwept(sg).pop(); s != nil { // 先从mcentral拿
 		goto havespan
 	}
 
@@ -163,7 +164,7 @@ func (c *mcentral) cacheSpan() *mspan {
 	}
 
 	// We failed to get a span from the mcentral so get one from mheap.
-	s = c.grow()
+	s = c.grow() // mcentral拿不到从堆上拿
 	if s == nil {
 		return nil
 	}
@@ -173,6 +174,7 @@ havespan:
 	if trace.enabled && !traceDone {
 		traceGCSweepDone()
 	}
+	// span 已经分配完了
 	n := int(s.nelems) - int(s.allocCount)
 	if n == 0 || s.freeindex == s.nelems || uintptr(s.allocCount) == s.nelems {
 		throw("span has no free objects")
