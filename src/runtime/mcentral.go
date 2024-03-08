@@ -81,7 +81,7 @@ func (c *mcentral) fullSwept(sweepgen uint32) *spanSet {
 // 拿一个mspan给mcache用
 func (c *mcentral) cacheSpan() *mspan {
 	// Deduct credit for this span allocation and sweep if necessary.
-	spanBytes := uintptr(class_to_allocnpages[c.spanclass.sizeclass()]) * _PageSize // pageNumber * pageSize
+	spanBytes := uintptr(class_to_allocnpages[c.spanclass.sizeclass()]) * _PageSize // 总大小 pageNumber * pageSize
 	deductSweepCredit(spanBytes, 0)
 
 	traceDone := false
@@ -164,7 +164,7 @@ func (c *mcentral) cacheSpan() *mspan {
 	}
 
 	// We failed to get a span from the mcentral so get one from mheap.
-	s = c.grow() // mcentral拿不到从堆上拿
+	s = c.grow() // mcentral拿不到从heap上拿
 	if s == nil {
 		return nil
 	}
@@ -195,6 +195,7 @@ havespan:
 //
 // s must have a span class corresponding to this
 // mcentral and it must not be empty.
+// mspan放回mcenter中
 func (c *mcentral) uncacheSpan(s *mspan) {
 	if s.allocCount == 0 {
 		throw("uncaching span but s.allocCount == 0")
@@ -229,6 +230,7 @@ func (c *mcentral) uncacheSpan(s *mspan) {
 		ss := sweepLocked{s}
 		ss.sweep(false)
 	} else {
+		// 放回mcenter中
 		if int(s.nelems)-int(s.allocCount) > 0 {
 			// Put it back on the partial swept list.
 			c.partialSwept(sg).push(s)
@@ -241,11 +243,12 @@ func (c *mcentral) uncacheSpan(s *mspan) {
 }
 
 // grow allocates a new empty span from the heap and initializes it for c's size class.
+// 从heap上分配一个新的mspan
 func (c *mcentral) grow() *mspan {
-	npages := uintptr(class_to_allocnpages[c.spanclass.sizeclass()])
-	size := uintptr(class_to_size[c.spanclass.sizeclass()])
+	npages := uintptr(class_to_allocnpages[c.spanclass.sizeclass()]) // 需要多少个page
+	size := uintptr(class_to_size[c.spanclass.sizeclass()])          //每个object的大小
 
-	s := mheap_.alloc(npages, c.spanclass)
+	s := mheap_.alloc(npages, c.spanclass) // 分配page，然后创建span
 	if s == nil {
 		return nil
 	}

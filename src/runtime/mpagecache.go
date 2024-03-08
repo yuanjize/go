@@ -15,13 +15,15 @@ const pageCachePages = 8 * unsafe.Sizeof(pageCache{}.cache)
 // allocate from without a lock. More specifically, it represents
 // a pageCachePages*pageSize chunk of memory with 0 or more free
 // pages in it.
+// 每个p都有一个page cache，从这个地方分配内存的时候不需要加锁。
 type pageCache struct {
-	base  uintptr // base address of the chunk
-	cache uint64  // 64-bit bitmap representing free pages (1 means free)
+	base  uintptr // base address of the chunk cache的起始地址
+	cache uint64  // 64-bit bitmap representing free pages (1 means free)  page分配情况的bitmap
 	scav  uint64  // 64-bit bitmap representing scavenged pages (1 means scavenged)
 }
 
 // empty reports whether the page cache has no free pages.
+// 没有free page可以分配
 func (c *pageCache) empty() bool {
 	return c.cache == 0
 }
@@ -34,6 +36,7 @@ func (c *pageCache) empty() bool {
 //
 // Returns a base address of zero on failure, in which case the
 // amount of scavenged memory should be ignored.
+// 从page cache中分配N个页面出来
 func (c *pageCache) alloc(npages uintptr) (uintptr, uintptr) {
 	if c.cache == 0 {
 		return 0, 0
@@ -41,8 +44,8 @@ func (c *pageCache) alloc(npages uintptr) (uintptr, uintptr) {
 	if npages == 1 {
 		i := uintptr(sys.TrailingZeros64(c.cache))
 		scav := (c.scav >> i) & 1
-		c.cache &^= 1 << i // set bit to mark in-use
-		c.scav &^= 1 << i  // clear bit to mark unscavenged
+		c.cache &^= 1 << i // set bit to mark in-use 标记改页面已经被分配出去
+		c.scav &^= 1 << i  // clear bit to mark unscavenged 标记该页面是unscavenged （需要回收？）
 		return c.base + i*pageSize, uintptr(scav) * pageSize
 	}
 	return c.allocN(npages)
@@ -54,15 +57,16 @@ func (c *pageCache) alloc(npages uintptr) (uintptr, uintptr) {
 //
 // Returns a base address and the amount of scavenged memory in the
 // allocated region in bytes.
+// 分配N个page
 func (c *pageCache) allocN(npages uintptr) (uintptr, uintptr) {
-	i := findBitRange64(c.cache, uint(npages))
+	i := findBitRange64(c.cache, uint(npages)) // 找到第一组连续npages个1的起始位置
 	if i >= 64 {
 		return 0, 0
 	}
 	mask := ((uint64(1) << npages) - 1) << i
 	scav := sys.OnesCount64(c.scav & mask)
-	c.cache &^= mask // mark in-use bits
-	c.scav &^= mask  // clear scavenged bits
+	c.cache &^= mask // mark in-use bits // 标记这几个页面是in-use状态
+	c.scav &^= mask  // clear scavenged bits 清理scavenged位 标记该页面是unscavenged （需要回收？）
 	return c.base + uintptr(i*pageSize), uintptr(scav) * pageSize
 }
 

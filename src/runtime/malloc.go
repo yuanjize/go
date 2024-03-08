@@ -842,6 +842,8 @@ func nextFreeFast(s *mspan) gclinkptr {
 //
 // Must run in a non-preemptible context since otherwise the owner of
 // c could change.
+// 因为要分配对象，需要送mcache取出来一个mspan，如果当前mcache的mspan满了，那需要找heap要一个放mcache里
+// gclinkptr是一个索引，指向mspan 空余object的位置
 func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bool) {
 	s = c.alloc[spc]
 	shouldhelpgc = false

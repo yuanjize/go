@@ -144,6 +144,7 @@ func getMCache(mp *m) *mcache {
 //
 // Must run in a non-preemptible context since otherwise the owner of
 // c could change.
+// 当前mcache的对应span用光了，申请一个新的span放到alloc里
 func (c *mcache) refill(spc spanClass) {
 	// Return the current cached span to the central lists.
 	s := c.alloc[spc]
@@ -156,7 +157,7 @@ func (c *mcache) refill(spc spanClass) {
 		if s.sweepgen != mheap_.sweepgen+3 {
 			throw("bad sweepgen in refill")
 		}
-		mheap_.central[spc].mcentral.uncacheSpan(s)
+		mheap_.central[spc].mcentral.uncacheSpan(s) // 放回mcenter中
 
 		// Count up how many slots were used and record it.
 		stats := memstats.heapStats.acquire()
@@ -179,6 +180,7 @@ func (c *mcache) refill(spc spanClass) {
 	}
 
 	// Get a new cached span from the central lists.
+	// 从mcentral拿一个mspan
 	s = mheap_.central[spc].mcentral.cacheSpan()
 	if s == nil {
 		throw("out of memory")

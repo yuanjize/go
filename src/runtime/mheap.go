@@ -435,7 +435,7 @@ type mspan struct {
 	freeindex uintptr
 	// TODO: Look up nelems from sizeclass and remove this field if it
 	// helps performance.
-	nelems uintptr // number of object in the span. // span中对象/slot的数目(包括in-use和free的)
+	nelems uintptr // number of object in the span. // span中对象/slot的数目(包括in-use和free的，或者说是能放多少个object)
 
 	// Cache of the allocBits at freeindex. allocCache is shifted
 	// such that the lowest bit corresponds to the bit freeindex.
@@ -486,8 +486,8 @@ type mspan struct {
 	needzero              uint8         // needs to be zeroed before allocation  // 分配出去之前是否需要清零
 	isUserArenaChunk      bool          // whether or not this span represents a user arena
 	allocCountBeforeCache uint16        // a copy of allocCount that is stored just before this span is cached span被cache之前使用这个变量来cache allocCount
-	elemsize              uintptr       // computed from sizeclass or from npages 根据sizeclass 和npages算出来的
-	limit                 uintptr       // end of data in span  span末尾
+	elemsize              uintptr       // computed from sizeclass or from 就是每个object的大小
+	limit                 uintptr       // end of data in span  span指向的page的末尾地址
 	speciallock           mutex         // guards specials list
 	specials              *special      // linked list of special records sorted by offset.
 	userArenaChunkFree    addrRange     // interval for managing chunk allocation
@@ -954,6 +954,7 @@ func (s spanAllocType) manual() bool {
 //
 // Returns a span that has been fully initialized. span.needzero indicates
 // whether the span has been zeroed. Note that it may not be.
+// 分配n个page从堆上，然后初始化mspan
 func (h *mheap) alloc(npages uintptr, spanclass spanClass) *mspan {
 	// Don't do any operations that lock the heap on the G stack.
 	// It might trigger stack growth, and the stack growth code needs
@@ -963,9 +964,9 @@ func (h *mheap) alloc(npages uintptr, spanclass spanClass) *mspan {
 		// To prevent excessive heap growth, before allocating n pages
 		// we need to sweep and reclaim at least n pages.
 		if !isSweepDone() {
-			h.reclaim(npages)
+			h.reclaim(npages) // 先回收n个page
 		}
-		s = h.allocSpan(npages, spanAllocHeap, spanclass)
+		s = h.allocSpan(npages, spanAllocHeap, spanclass) // 分配那个page和mspan
 	})
 	return s
 }
@@ -996,6 +997,7 @@ func (h *mheap) allocManual(npages uintptr, typ spanAllocType) *mspan {
 
 // setSpans modifies the span map so [spanOf(base), spanOf(base+npage*pageSize))
 // is s.
+// mspan放到arena.spans 里面
 func (h *mheap) setSpans(base, npage uintptr, s *mspan) {
 	p := base / pageSize
 	ai := arenaIndex(base)
@@ -1073,6 +1075,7 @@ func (h *mheap) allocNeedsZero(base, npage uintptr) (needZero bool) {
 	return
 }
 
+// 从P的mspancache中分配mspan,不需要加锁
 // tryAllocMSpan attempts to allocate an mspan object from
 // the P-local cache, but may fail.
 //
@@ -1155,6 +1158,12 @@ func (h *mheap) freeMSpanLocked(s *mspan) {
 	h.spanalloc.free(unsafe.Pointer(s))
 }
 
+/*
+ 分配n个page,mspan指向这些page
+ 1.先尝试从p的cache中拿page，因为这个不用加锁
+ 2. 1失败的话用heap的1page分配器分配page
+ 3. 初始化mspan, mspan的指针指向page
+*/
 // allocSpan allocates an mspan which owns npages worth of memory.
 //
 // If typ.manual() == false, allocSpan allocates a heap span of class spanclass
@@ -1183,24 +1192,25 @@ func (h *mheap) allocSpan(npages uintptr, typ spanAllocType, spanclass spanClass
 	// size, we already manage to do this by default.
 	needPhysPageAlign := physPageAlignedStacks && typ == spanAllocStack && pageSize < physPageSize
 
-	// If the allocation is small enough, try the page cache!
+	// If the allocation is small enough(不到pageCache缓存页面的四分之一), try the page cache!
 	// The page cache does not support aligned allocations, so we cannot use
 	// it if we need to provide a physical page aligned stack allocation.
 	pp := gp.m.p.ptr()
 	if !needPhysPageAlign && pp != nil && npages < pageCachePages/4 {
+		// 先尝试从p的pagecache中拿，因为不用加锁
 		c := &pp.pcache
 
 		// If the cache is empty, refill it.
-		if c.empty() {
+		if c.empty() { // p的pagecache中没有free的，用h分配一下
 			lock(&h.lock)
 			*c = h.pages.allocToCache()
 			unlock(&h.lock)
 		}
 
 		// Try to allocate from the cache.
-		base, scav = c.alloc(npages)
+		base, scav = c.alloc(npages) // 从pagecache中拿
 		if base != 0 {
-			s = h.tryAllocMSpan()
+			s = h.tryAllocMSpan() // 尝试从p的mspan cache中拿mspan结构体
 			if s != nil {
 				goto HaveSpan
 			}
@@ -1244,7 +1254,7 @@ func (h *mheap) allocSpan(npages uintptr, typ spanAllocType, spanclass spanClass
 
 	if base == 0 {
 		// Try to acquire a base address.
-		base, scav = h.pages.alloc(npages)
+		base, scav = h.pages.alloc(npages) // p上没有，用h分配
 		if base == 0 {
 			var ok bool
 			growth, ok = h.grow(npages)
@@ -1336,9 +1346,10 @@ HaveSpan:
 		scavenge.assistTime.Add(now - start)
 	}
 
-	// Initialize the span.
+	// Initialize the span. 初始化span字段，mspan放到arean中
 	h.initSpan(s, typ, spanclass, base, npages)
 
+	// 下面都是修改一些指标
 	// Commit and account for any scavenged memory that the span now owns.
 	nbytes := npages * pageSize
 	if scav != 0 {
@@ -1374,14 +1385,15 @@ HaveSpan:
 
 // initSpan initializes a blank span s which will represent the range
 // [base, base+npages*pageSize). typ is the type of span being allocated.
+// 初始化mspan对应的page地址，吧mspan放到arean中
 func (h *mheap) initSpan(s *mspan, typ spanAllocType, spanclass spanClass, base, npages uintptr) {
 	// At this point, both s != nil and base != 0, and the heap
 	// lock is no longer held. Initialize the span.
-	s.init(base, npages)
+	s.init(base, npages) // 初始化mspan
 	if h.allocNeedsZero(base, npages) {
 		s.needzero = 1
 	}
-	nbytes := npages * pageSize
+	nbytes := npages * pageSize // 计算mspan一共负责多少bytes
 	if typ.manual() {
 		s.manualFreeList = 0
 		s.nelems = 0
@@ -1396,8 +1408,8 @@ func (h *mheap) initSpan(s *mspan, typ spanAllocType, spanclass spanClass, base,
 			s.nelems = 1
 			s.divMul = 0
 		} else {
-			s.elemsize = uintptr(class_to_size[sizeclass])
-			s.nelems = nbytes / s.elemsize
+			s.elemsize = uintptr(class_to_size[sizeclass]) // 每个object大小
+			s.nelems = nbytes / s.elemsize                 // 能放多少个object
 			s.divMul = class_to_divmagic[sizeclass]
 		}
 
@@ -1433,7 +1445,7 @@ func (h *mheap) initSpan(s *mspan, typ spanAllocType, spanclass spanClass, base,
 	// this thread until pointers into the span are published (and
 	// we execute a publication barrier at the end of this function
 	// before that happens) or pageInUse is updated.
-	h.setSpans(s.base(), npages, s)
+	h.setSpans(s.base(), npages, s) // 放到 arena
 
 	if !typ.manual() {
 		// Mark in-use span in arena page bitmap.
@@ -1665,13 +1677,14 @@ func runtime_debug_freeOSMemory() {
 }
 
 // Initialize a new span with the given start and npages.
+// 初始化mspan
 func (span *mspan) init(base uintptr, npages uintptr) {
 	// span is *not* zeroed.
 	span.next = nil
 	span.prev = nil
 	span.list = nil
-	span.startAddr = base
-	span.npages = npages
+	span.startAddr = base // mspan起始地址
+	span.npages = npages  // 包含的page个数
 	span.allocCount = 0
 	span.spanclass = 0
 	span.elemsize = 0

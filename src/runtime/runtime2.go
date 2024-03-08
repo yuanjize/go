@@ -615,7 +615,7 @@ type p struct {
 	sysmontick  sysmontick // last tick observed by sysmon
 	m           muintptr   // back-link to associated m (nil if idle)
 	mcache      *mcache
-	pcache      pageCache
+	pcache      pageCache // 缓存了几个page，用来分配mspan用
 	raceprocctx uintptr
 
 	deferpool    []*_defer // pool of available defer structs (see panic.go)
@@ -653,6 +653,7 @@ type p struct {
 	sudogbuf   [128]*sudog
 
 	// Cache of mspan objects from the heap.
+	// 缓存了len个mspan
 	mspancache struct {
 		// We need an explicit length here because this field is used
 		// in allocation codepaths where write barriers are not allowed,
